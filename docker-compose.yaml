@@ -1,33 +1,61 @@
-networks:
-  servers:
+version: '3.8'
 
 services:
-
-  balancer:
+  db:
     build: .
-    command: "lb"
-    networks:
-      - servers
     ports:
-      - "8090:8090"
+      - "8082:8082"
+    volumes:
+      - db-data:/opt/practice-4/out
+    command: ["db"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8082/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   server1:
     build: .
-    networks:
-      - servers
     ports:
       - "8080:8080"
+    environment:
+      - PORT=8080
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   server2:
     build: .
-    networks:
-      - servers
     ports:
       - "8081:8080"
+    environment:
+      - PORT=8080
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
 
   server3:
     build: .
-    networks:
-      - servers
     ports:
-      - "8082:8080"
+      - "8083:8080"
+    environment:
+      - PORT=8080
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  balancer:
+    build: .
+    ports:
+      - "8090:8090"
+    depends_on:
+      - server1
+      - server2
+      - server3
+    command: ["balancer", "-trace=true"]
+
+volumes:
+  db-data:

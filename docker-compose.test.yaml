@@ -1,16 +1,49 @@
+version: '3.8'
+
 services:
-  test:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    networks:
-      - servers
+  db:
+    build: .
+    command: ["db"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8082/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server1:
+    build: .
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  server2:
+    build: .
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  server3:
+    build: .
+    command: ["server"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  balancer:
+    build: .
+    command: ["balancer", "-trace=true"]
     depends_on:
       - server1
       - server2
       - server3
-      - balancer
 
-  balancer:
-    # Для тестів включаємо режим відлагодження, коли балансувальник додає інформацію, кому було відправлено запит.
-    command: ["lb", "--trace=true"]
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      - INTEGRATION_TEST=1
+    depends_on:
+      - balancer

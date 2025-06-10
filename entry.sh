@@ -1,11 +1,18 @@
-#!/usr/bin/env sh
+#!/bin/sh
 
-bin=$1
-shift
-
-if [ -z "$bin" ]; then
-  echo "binary is not defined"
-  exit 1
-fi
-
-exec ./"$bin" $@
+case "$1" in
+    "server")
+        exec /opt/practice-4/server
+        ;;
+    "db")
+        exec /opt/practice-4/db
+        ;;
+    "balancer")
+        shift
+        exec /opt/practice-4/lb "$@"
+        ;;
+    *)
+        echo "Usage: $0 {server|db|balancer}"
+        exit 1
+        ;;
+esac
