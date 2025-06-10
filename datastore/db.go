@@ -180,63 +180,6 @@ func (db *Db) startWriteHandler() {
 	}()
 }
 
-func (db *Db) updateIndex(key string, position int64) {
-	currentSegment := db.getCurrentSegment()
-	currentSegment.mu.Lock()
-	currentSegment.keyIndex[key] = position
-	currentSegment.mu.Unlock()
-}
-
-func (db *Db) getKeyPosition(key string) *KeyLocation {
-	db.closeMutex.Lock()
-	defer db.closeMutex.Unlock()
-
-	if db.closed {
-		return nil
-	}
-
-	segment, pos, err := db.findKeyLocation(key)
-	if err != nil {
-		return nil
-	}
-	return &KeyLocation{segment, pos}
-}
-
-func (db *Db) Get(key string) (string, error) {
-	location := db.getKeyPosition(key)
-	if location == nil {
-		return "", fmt.Errorf("key not found in datastore")
-	}
-
-	// Используем метод с проверкой чексумм
-	value, err := location.segment.readFromSegmentWithChecksum(location.position)
-	if err != nil {
-		return "", err
-	}
-	return value, nil
-}
-
-func (db *Db) Put(key, value string) error {
-	db.closeMutex.Lock()
-	defer db.closeMutex.Unlock()
-
-	if db.closed {
-		return fmt.Errorf("database is closed")
-	}
-
-	responseChannel := make(chan error, 1)
-	operation := WriteOperation{
-		data: entry{
-			key:   key,
-			value: value,
-		},
-		response: responseChannel,
-	}
-
-	db.writeOperations <- operation
-	return <-responseChannel
-}
-
 func (db *Db) initializeNewSegment() error {
 	newFilePath := db.generateFileName()
 	file, err := os.OpenFile(newFilePath, os.O_APPEND|os.O_RDWR|os.O_CREATE, defaultFileMode)
@@ -305,7 +248,7 @@ func (db *Db) compactOldSegments() {
 			if !keysWritten[key] {
 				value, err := segment.readFromSegmentWithChecksum(position)
 				if err != nil {
-					continue // Пропускаем поврежденные записи
+					continue
 				}
 
 				record := entry{
@@ -397,11 +340,10 @@ func (db *Db) processRecovery(file *os.File, segment *Segment) error {
 			var record entry
 			record.Decode(data)
 
-			// Проверяем чексумму при восстановлении
 			if checksumErr := record.verifyChecksum(); checksumErr != nil {
 				fmt.Printf("Warning: corrupted entry found during recovery for key '%s': %v\n", record.key, checksumErr)
 				currentOffset += int64(bytesRead)
-				continue // Пропускаем поврежденную запись
+				continue
 			}
 
 			segment.mu.Lock()
@@ -419,6 +361,13 @@ func (db *Db) processRecovery(file *os.File, segment *Segment) error {
 	return err
 }
 
+func (db *Db) updateIndex(key string, position int64) {
+	currentSegment := db.getCurrentSegment()
+	currentSegment.mu.Lock()
+	currentSegment.keyIndex[key] = position
+	currentSegment.mu.Unlock()
+}
+
 func (db *Db) findKeyLocation(key string) (*Segment, int64, error) {
 	db.segmentLock.RLock()
 	defer db.segmentLock.RUnlock()
@@ -434,6 +383,55 @@ func (db *Db) findKeyLocation(key string) (*Segment, int64, error) {
 		}
 	}
 	return nil, 0, fmt.Errorf("key not found in datastore")
+}
+
+func (db *Db) getKeyPosition(key string) *KeyLocation {
+	db.closeMutex.Lock()
+	defer db.closeMutex.Unlock()
+
+	if db.closed {
+		return nil
+	}
+
+	segment, pos, err := db.findKeyLocation(key)
+	if err != nil {
+		return nil
+	}
+	return &KeyLocation{segment, pos}
+}
+
+func (db *Db) Get(key string) (string, error) {
+	location := db.getKeyPosition(key)
+	if location == nil {
+		return "", fmt.Errorf("key not found in datastore")
+	}
+
+	value, err := location.segment.readFromSegmentWithChecksum(location.position)
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func (db *Db) Put(key, value string) error {
+	db.closeMutex.Lock()
+	defer db.closeMutex.Unlock()
+
+	if db.closed {
+		return fmt.Errorf("database is closed")
+	}
+
+	responseChannel := make(chan error, 1)
+	operation := WriteOperation{
+		data: entry{
+			key:   key,
+			value: value,
+		},
+		response: responseChannel,
+	}
+
+	db.writeOperations <- operation
+	return <-responseChannel
 }
 
 func (db *Db) getCurrentSegment() *Segment {
@@ -480,7 +478,6 @@ func (segment *Segment) readFromSegmentWithChecksum(position int64) (string, err
 
 	reader := bufio.NewReader(file)
 
-	// Используем функцию readValue, которая проверяет чексумму
 	value, err := readValue(reader)
 	if err != nil {
 		return "", fmt.Errorf("checksum verification failed: %w", err)

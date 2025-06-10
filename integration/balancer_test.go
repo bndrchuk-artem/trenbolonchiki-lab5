@@ -83,6 +83,7 @@ func testDatabaseIntegration(t *testing.T) {
 	}
 
 	t.Logf("Successfully retrieved data: key=%s, value=%s", data.Key, data.Value)
+
 	resp2, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=nonexistent", baseAddress))
 	if err != nil {
 		t.Fatalf("Request for non-existent key failed: %v", err)

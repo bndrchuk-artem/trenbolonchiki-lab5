@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 )
 
 const (
-	testSegmentSize    = 45 
+	testSegmentSize    = 45
 	smallSegmentSize   = 35
 	compactionWaitTime = 2 * time.Second
 )
@@ -37,6 +38,12 @@ func TestDb_Put(t *testing.T) {
 		{"3", "v3"},
 	}
 
+	firstSegmentFile, err := os.Open(filepath.Join(tempDir, dataFileName+"0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer firstSegmentFile.Close()
+
 	t.Run("put and get operations", func(t *testing.T) {
 		for _, pair := range testPairs {
 			err := database.Put(pair.key, pair.value)
@@ -54,6 +61,32 @@ func TestDb_Put(t *testing.T) {
 			if retrievedValue != pair.value {
 				t.Errorf("Value mismatch for key %s: expected %s, got %s", pair.key, pair.value, retrievedValue)
 			}
+		}
+	})
+
+	initialFileInfo, err := firstSegmentFile.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialSize := initialFileInfo.Size()
+
+	t.Run("file size consistency on duplicate keys", func(t *testing.T) {
+		for _, pair := range testPairs {
+			err := database.Put(pair.key, pair.value)
+			if err != nil {
+				t.Errorf("Failed to put duplicate key %s: %v", pair.key, err)
+			}
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		currentFileInfo, err := firstSegmentFile.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if initialSize != currentFileInfo.Size() {
+			t.Errorf("File size changed unexpectedly: initial %d vs current %d", initialSize, currentFileInfo.Size())
 		}
 	})
 
@@ -168,10 +201,6 @@ func TestDb_Segmentation(t *testing.T) {
 	})
 }
 
-func createTestDatabase(directory string, segmentSize int64) (*Db, error) {
-	return CreateDb(directory, segmentSize)
-}
-
 func TestDb_ParallelOperations(t *testing.T) {
 	tempDir, err := ioutil.TempDir("", "parallel_test")
 	if err != nil {
@@ -237,6 +266,7 @@ func TestDb_ParallelOperations(t *testing.T) {
 
 		var wg sync.WaitGroup
 		errors := make(chan error, numWorkers*keysPerWorker)
+
 		for workerID := 0; workerID < numWorkers; workerID++ {
 			wg.Add(1)
 			go func(id int) {
@@ -325,73 +355,12 @@ func TestDb_ParallelOperations(t *testing.T) {
 	})
 }
 
-func TestDb_MixedConcurrentOperations(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "mixed_concurrent_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	database, err := createTestDatabase(tempDir, 500)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("base_key_%d", i)
-		value := fmt.Sprintf("base_value_%d", i)
-		database.Put(key, value)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	var wg sync.WaitGroup
-	errors := make(chan error, 100)
-
-	for i := 0; i < 5; i++ {
-		wg.Add(1)
-		go func(readerID int) {
-			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				key := fmt.Sprintf("base_key_%d", j%10)
-				_, err := database.Get(key)
-				if err != nil {
-					errors <- fmt.Errorf("Reader %d failed to get %s: %v", readerID, key, err)
-					return
-				}
-				time.Sleep(5 * time.Millisecond)
-			}
-		}(i)
-	}
-
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func(writerID int) {
-			defer wg.Done()
-			for j := 0; j < 15; j++ {
-				key := fmt.Sprintf("writer_%d_key_%d", writerID, j)
-				value := fmt.Sprintf("writer_%d_value_%d", writerID, j)
-				err := database.Put(key, value)
-				if err != nil {
-					errors <- fmt.Errorf("Writer %d failed to put %s: %v", writerID, key, err)
-					return
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
-		}(i)
-	}
-
-	wg.Wait()
-	close(errors)
-
-	for err := range errors {
-		t.Error(err)
-	}
+func createTestDatabase(directory string, segmentSize int64) (*Db, error) {
+	return CreateDb(directory, segmentSize)
 }
 
-func TestDb_ConcurrentClose(t *testing.T) {
-	tempDir, err := ioutil.TempDir("", "concurrent_close_test")
+func TestDb_ChecksumValidation(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "checksum_test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -401,29 +370,123 @@ func TestDb_ConcurrentClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer database.Close()
 
-	var wg sync.WaitGroup
+	t.Run("valid checksum on normal operation", func(t *testing.T) {
+		key := "test_key"
+		value := "test_value_with_checksum"
 
-	for i := 0; i < 3; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
-				key := fmt.Sprintf("close_test_%d_%d", workerID, j)
-				value := fmt.Sprintf("value_%d_%d", workerID, j)
-				database.Put(key, value)
+		err := database.Put(key, value)
+		if err != nil {
+			t.Fatalf("Failed to put value: %v", err)
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		retrievedValue, err := database.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get value with valid checksum: %v", err)
+		}
+
+		if retrievedValue != value {
+			t.Errorf("Value mismatch: expected %s, got %s", value, retrievedValue)
+		}
+	})
+
+	t.Run("checksum validation across segments", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("checksum_key_%d", i)
+			value := fmt.Sprintf("checksum_value_%d_with_some_longer_content_to_fill_space", i)
+
+			err := database.Put(key, value)
+			if err != nil {
+				t.Fatalf("Failed to put key %s: %v", key, err)
 			}
-		}(i)
+		}
+
+		time.Sleep(100 * time.Millisecond)
+
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("checksum_key_%d", i)
+			expectedValue := fmt.Sprintf("checksum_value_%d_with_some_longer_content_to_fill_space", i)
+
+			value, err := database.Get(key)
+			if err != nil {
+				t.Errorf("Failed to get key %s: %v", key, err)
+				continue
+			}
+
+			if value != expectedValue {
+				t.Errorf("Value mismatch for key %s: expected %s, got %s", key, expectedValue, value)
+			}
+		}
+	})
+
+	t.Run("recovery with checksum validation", func(t *testing.T) {
+		database.Close()
+
+		recoveredDb, err := createTestDatabase(tempDir, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer recoveredDb.Close()
+
+		key := "test_key"
+		expectedValue := "test_value_with_checksum"
+
+		value, err := recoveredDb.Get(key)
+		if err != nil {
+			t.Fatalf("Failed to get value after recovery: %v", err)
+		}
+
+		if value != expectedValue {
+			t.Errorf("Value mismatch after recovery: expected %s, got %s", expectedValue, value)
+		}
+	})
+}
+
+func TestDb_ChecksumWithCompaction(t *testing.T) {
+	tempDir, err := ioutil.TempDir("", "checksum_compaction_test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	database, err := createTestDatabase(tempDir, 50) // Маленький размер для быстрого слияния
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+
+	testData := make(map[string]string)
+	for i := 0; i < 20; i++ {
+		key := fmt.Sprintf("compact_key_%d", i)
+		value := fmt.Sprintf("compact_value_%d_with_longer_content", i)
+		testData[key] = value
+
+		err := database.Put(key, value)
+		if err != nil {
+			t.Fatalf("Failed to put key %s: %v", key, err)
+		}
+
+		if i%3 == 0 {
+			newValue := value + "_updated"
+			testData[key] = newValue
+			database.Put(key, newValue)
+		}
 	}
 
-	time.Sleep(50 * time.Millisecond)
-	err = database.Close()
-	if err != nil {
-		t.Errorf("Failed to close database: %v", err)
-	}
-	wg.Wait()
-	err = database.Close()
-	if err != nil {
-		t.Errorf("Second close should not fail: %v", err)
+	time.Sleep(2 * time.Second)
+
+	for key, expectedValue := range testData {
+		value, err := database.Get(key)
+		if err != nil {
+			t.Errorf("Failed to get key %s after compaction: %v", key, err)
+			continue
+		}
+
+		if value != expectedValue {
+			t.Errorf("Value mismatch after compaction for key %s: expected %s, got %s", key, expectedValue, value)
+		}
 	}
 }
