@@ -19,7 +19,6 @@ const (
 
 type keyIndex map[string]int64
 
-
 type IndexOperation struct {
 	isWrite  bool
 	key      string
@@ -117,7 +116,6 @@ func (db *Db) Close() error {
 	close(db.indexOperations)
 	close(db.writeOperations)
 
-
 	db.indexWG.Wait()
 	db.writeWG.Wait()
 
@@ -210,7 +208,8 @@ func (db *Db) Get(key string) (string, error) {
 		return "", fmt.Errorf("key not found in datastore")
 	}
 
-	value, err := location.segment.readFromSegment(location.position)
+	// Используем метод с проверкой чексумм
+	value, err := location.segment.readFromSegmentWithChecksum(location.position)
 	if err != nil {
 		return "", err
 	}
@@ -304,9 +303,9 @@ func (db *Db) compactOldSegments() {
 
 		for key, position := range segment.keyIndex {
 			if !keysWritten[key] {
-				value, err := segment.readFromSegment(position)
+				value, err := segment.readFromSegmentWithChecksum(position)
 				if err != nil {
-					continue
+					continue // Пропускаем поврежденные записи
 				}
 
 				record := entry{
@@ -398,6 +397,13 @@ func (db *Db) processRecovery(file *os.File, segment *Segment) error {
 			var record entry
 			record.Decode(data)
 
+			// Проверяем чексумму при восстановлении
+			if checksumErr := record.verifyChecksum(); checksumErr != nil {
+				fmt.Printf("Warning: corrupted entry found during recovery for key '%s': %v\n", record.key, checksumErr)
+				currentOffset += int64(bytesRead)
+				continue // Пропускаем поврежденную запись
+			}
+
 			segment.mu.Lock()
 			segment.keyIndex[record.key] = currentOffset
 			segment.mu.Unlock()
@@ -457,5 +463,28 @@ func (segment *Segment) readFromSegment(position int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return value, nil
+}
+
+func (segment *Segment) readFromSegmentWithChecksum(position int64) (string, error) {
+	file, err := os.Open(segment.path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	_, err = file.Seek(position, 0)
+	if err != nil {
+		return "", err
+	}
+
+	reader := bufio.NewReader(file)
+
+	// Используем функцию readValue, которая проверяет чексумму
+	value, err := readValue(reader)
+	if err != nil {
+		return "", fmt.Errorf("checksum verification failed: %w", err)
+	}
+
 	return value, nil
 }
