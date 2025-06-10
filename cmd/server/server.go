@@ -11,13 +11,13 @@ import (
 	"os"
 	"time"
 
-	"github.com/bndrchuk-artem/test5/httptools"
-	"github.com/bndrchuk-artem/test5/signal"
+	"github.com/bndrchuk-artem/trenbolonchiki-lab5/httptools"
+	"github.com/bndrchuk-artem/trenbolonchiki-lab5/signal"
 )
 
 const confResponseDelaySec = "CONF_RESPONSE_DELAY_SEC"
 const confHealthFailure = "CONF_HEALTH_FAILURE"
-const teamName = "trenbolonchiki" 
+const teamName = "trenbolonchiki"
 
 var port = flag.Int("port", 8080, "server port")
 var dbHost = flag.String("db-host", "db:8082", "database host:port")
@@ -52,7 +52,7 @@ func main() {
 	h.HandleFunc("/api/v1/some-data", func(rw http.ResponseWriter, r *http.Request) {
 		key := r.URL.Query().Get("key")
 		if key == "" {
-			key = teamName 
+			key = teamName
 		}
 
 		dbResp, err := http.Get(fmt.Sprintf("http://%s/db/%s", *dbHost, key))
