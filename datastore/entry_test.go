@@ -21,10 +21,12 @@ func TestEntry_EncodeWithChecksum(t *testing.T) {
 		t.Error("incorrect value")
 	}
 
+	
 	expectedChecksum := sha1.Sum([]byte("value"))
 	if decoded.checksum != expectedChecksum {
 		t.Error("incorrect checksum")
 	}
+
 
 	if err := decoded.verifyChecksum(); err != nil {
 		t.Errorf("checksum verification failed: %v", err)
@@ -34,10 +36,12 @@ func TestEntry_EncodeWithChecksum(t *testing.T) {
 func TestEntry_ChecksumVerification(t *testing.T) {
 	e := entry{key: "testkey", value: "testvalue"}
 
+
 	e.checksum = e.calculateChecksum()
 	if err := e.verifyChecksum(); err != nil {
 		t.Errorf("Expected valid checksum to pass, got error: %v", err)
 	}
+
 
 	e.checksum = sha1.Sum([]byte("corrupted_value"))
 	if err := e.verifyChecksum(); err == nil {
@@ -110,6 +114,7 @@ func TestEntry_ChecksumConsistency(t *testing.T) {
 		t.Run(tc.key+"_"+tc.value, func(t *testing.T) {
 			e := entry{key: tc.key, value: tc.value}
 
+
 			encoded := e.Encode()
 			var decoded entry
 			decoded.Decode(encoded)
@@ -120,6 +125,7 @@ func TestEntry_ChecksumConsistency(t *testing.T) {
 			if decoded.value != tc.value {
 				t.Errorf("Value mismatch: expected %s, got %s", tc.value, decoded.value)
 			}
+
 
 			if err := decoded.verifyChecksum(); err != nil {
 				t.Errorf("Checksum verification failed: %v", err)
