@@ -53,24 +53,20 @@ func (h *dbHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	// Создаем директорию для данных
 	dataDir := "/opt/practice-4/out"
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("Failed to create data directory: %v", err)
 	}
 
-	// Инициализируем базу данных с размером сегмента 10MB
 	db, err := datastore.CreateDb(dataDir, 10*1024*1024)
 	if err != nil {
 		log.Fatalf("DB initialization failed: %v", err)
 	}
 	defer db.Close()
 
-	// Настраиваем HTTP обработчики
 	handler := &dbHandler{db: db}
 	http.Handle("/db/", handler)
 
-	// Эндпоинт для проверки здоровья
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))

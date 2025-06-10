@@ -208,7 +208,6 @@ func (db *Db) Get(key string) (string, error) {
 		return "", fmt.Errorf("key not found in datastore")
 	}
 
-	// Используем метод с проверкой чексумм
 	value, err := location.segment.readFromSegmentWithChecksum(location.position)
 	if err != nil {
 		return "", err
@@ -305,7 +304,7 @@ func (db *Db) compactOldSegments() {
 			if !keysWritten[key] {
 				value, err := segment.readFromSegmentWithChecksum(position)
 				if err != nil {
-					continue // Пропускаем поврежденные записи
+					continue
 				}
 
 				record := entry{
@@ -397,11 +396,10 @@ func (db *Db) processRecovery(file *os.File, segment *Segment) error {
 			var record entry
 			record.Decode(data)
 
-			// Проверяем чексумму при восстановлении
 			if checksumErr := record.verifyChecksum(); checksumErr != nil {
 				fmt.Printf("Warning: corrupted entry found during recovery for key '%s': %v\n", record.key, checksumErr)
 				currentOffset += int64(bytesRead)
-				continue // Пропускаем поврежденную запись
+				continue
 			}
 
 			segment.mu.Lock()
@@ -480,7 +478,6 @@ func (segment *Segment) readFromSegmentWithChecksum(position int64) (string, err
 
 	reader := bufio.NewReader(file)
 
-	// Используем функцию readValue, которая проверяет чексумму
 	value, err := readValue(reader)
 	if err != nil {
 		return "", fmt.Errorf("checksum verification failed: %w", err)
