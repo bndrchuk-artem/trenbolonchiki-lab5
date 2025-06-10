@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	testSegmentSize    = 45  // Маленький размер для быстрого тестирования
+	testSegmentSize    = 45 
 	smallSegmentSize   = 35
 	compactionWaitTime = 2 * time.Second
 )
@@ -80,7 +80,6 @@ func TestDb_Put(t *testing.T) {
 	})
 }
 
-// Ключевой тест для сегментации
 func TestDb_Segmentation(t *testing.T) {
 	testDirectory, err := ioutil.TempDir("", "segmentation_test")
 	if err != nil {
