@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -9,9 +10,15 @@ import (
 )
 
 const baseAddress = "http://balancer:8090"
+const teamName = "trenbolonchiki"
 
 var client = http.Client{
 	Timeout: 3 * time.Second,
+}
+
+type Response struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 func TestBalancer(t *testing.T) {
@@ -23,8 +30,8 @@ func TestBalancer(t *testing.T) {
 		t.Fatalf("Balancer is not ready: %v", err)
 	}
 
-	t.Run("BasicFunctionality", func(t *testing.T) {
-		testBasicFunctionality(t)
+	t.Run("DatabaseIntegration", func(t *testing.T) {
+		testDatabaseIntegration(t)
 	})
 
 	t.Run("ServerDistribution", func(t *testing.T) {
@@ -36,11 +43,13 @@ func waitForBalancer(t *testing.T) error {
 	t.Log("Waiting for balancer to be ready...")
 
 	for i := 0; i < 30; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=%s", baseAddress, teamName))
 		if err == nil {
 			resp.Body.Close()
-			t.Log("Balancer is ready")
-			return nil
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+				t.Log("Balancer is ready")
+				return nil
+			}
 		}
 		t.Logf("Attempt %d: %v", i+1, err)
 		time.Sleep(2 * time.Second)
@@ -48,22 +57,40 @@ func waitForBalancer(t *testing.T) error {
 	return fmt.Errorf("balancer is not responding after 30 attempts")
 }
 
-func testBasicFunctionality(t *testing.T) {
-	resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+func testDatabaseIntegration(t *testing.T) {
+	resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=%s", baseAddress, teamName))
 	if err != nil {
-		t.Fatalf("Basic request failed: %v", err)
+		t.Fatalf("Request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		return
 	}
 
-	server := resp.Header.Get("lb-from")
-	if server == "" {
-		t.Error("Expected lb-from header to be present")
-	} else {
-		t.Logf("Response from server: %s", server)
+	var data Response
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if data.Key != teamName {
+		t.Errorf("Expected key '%s', got '%s'", teamName, data.Key)
+	}
+
+	if len(data.Value) != 10 {
+		t.Errorf("Expected date value in format YYYY-MM-DD, got: %s", data.Value)
+	}
+
+	t.Logf("Successfully retrieved data: key=%s, value=%s", data.Key, data.Value)
+	resp2, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=nonexistent", baseAddress))
+	if err != nil {
+		t.Fatalf("Request for non-existent key failed: %v", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status 404 for non-existent key, got %d", resp2.StatusCode)
 	}
 }
 
@@ -72,7 +99,7 @@ func testServerDistribution(t *testing.T) {
 	const numRequests = 15
 
 	for i := 0; i < numRequests; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=%s", baseAddress, teamName))
 		if err != nil {
 			t.Fatalf("Request %d failed: %v", i+1, err)
 		}
@@ -112,7 +139,7 @@ func BenchmarkBalancer(b *testing.B) {
 	}
 
 	for i := 0; i < 10; i++ {
-		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+		resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=%s", baseAddress, teamName))
 		if err == nil {
 			resp.Body.Close()
 			break
@@ -123,7 +150,7 @@ func BenchmarkBalancer(b *testing.B) {
 	b.ResetTimer()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data", baseAddress))
+			resp, err := client.Get(fmt.Sprintf("%s/api/v1/some-data?key=%s", baseAddress, teamName))
 			if err != nil {
 				b.Errorf("Request failed: %v", err)
 				continue
